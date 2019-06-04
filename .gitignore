@@ -1,0 +1,5 @@
+exp/**/*.bin
+.vscode/
+glue_data/
+sts.bak/
+submit/
