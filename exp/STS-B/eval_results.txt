@@ -1,6 +1,0 @@
-corr = 0.8980324082125236
-eval_loss = 0.44638650832658117
-global_step = 0
-loss = None
-pearson = 0.9000297985023217
-spearmanr = 0.8960350179227256
