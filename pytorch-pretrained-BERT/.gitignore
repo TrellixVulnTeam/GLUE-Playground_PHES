@@ -123,3 +123,7 @@ tensorflow_code
 
 # Models
 models
+
+exp/
+glue_data/
+model_checkpoints/
