@@ -1,9 +1,10 @@
 # Configures
-export TASK_NAME=STS-B
+export TASK_NAME=CoLA
 export EPOCH=8.0
 export CASED=uncased
+export LARGE=large
 
-export EXP_DIR=exp/$CASED/epoch$EPOCH/$TASK_NAME-large/
+export EXP_DIR=exp/$CASED/epoch$EPOCH/$TASK_NAME-$LARGE
 export GLUE_DIR=glue_data
 
 python pytorch-pretrained-BERT/examples/run_classifier.py \
@@ -12,7 +13,7 @@ python pytorch-pretrained-BERT/examples/run_classifier.py \
   --do_eval \
   --do_test \
   --do_lower_case \
-  --bert_model bert-large-$CASED \
+  --bert_model bert-$LARGE-$CASED \
   --data_dir $GLUE_DIR/$TASK_NAME \
   --max_seq_length 128 \
   --train_batch_size 32 \

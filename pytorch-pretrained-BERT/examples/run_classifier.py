@@ -190,6 +190,12 @@ class ColaProcessor(DataProcessor):
         """See base class."""
         return self._create_examples(
             self._read_tsv(os.path.join(data_dir, "dev.tsv")), "dev")
+    
+    def get_test_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_tsv(os.path.join(data_dir, "test.tsv")), "test")
+        
 
     def get_labels(self):
         """See base class."""
@@ -200,8 +206,14 @@ class ColaProcessor(DataProcessor):
         examples = []
         for (i, line) in enumerate(lines):
             guid = "%s-%s" % (set_type, i)
-            text_a = line[3]
-            label = line[1]
+            if set_type != "test":
+                text_a = line[3]
+                label = line[1]
+            else:
+                if i == 0:
+                    continue
+                text_a = line[1]
+                label = None
             examples.append(
                 InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
         return examples
@@ -544,6 +556,7 @@ def pearson_and_spearman(preds, labels):
 
 
 def compute_metrics(task_name, preds, labels):
+    labels = labels[:len(preds)]
     assert len(preds) == len(labels)
     if task_name == "cola":
         return {"mcc": matthews_corrcoef(labels, preds)}
@@ -728,8 +741,8 @@ def main():
     if not args.do_train and not args.do_eval and not args.do_test:
         raise ValueError("At least one of `do_train`, `do_eval` or `do_test` must be True.")
 
-    if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
-        raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
+    # if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
+    #     raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
@@ -809,6 +822,8 @@ def main():
     nb_tr_steps = 0
     tr_loss = 0
     if args.do_train:
+        best_eval = 0
+        best_eval_epoch = 0
         train_features = convert_examples_to_features(
             train_examples, label_list, args.max_seq_length, tokenizer, output_mode)
         if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
@@ -878,6 +893,7 @@ def main():
                     optimizer.zero_grad()
                     global_step += 1
 
+            save_model(model, tokenizer, num_labels, args, epoch)
             ## Evaluate 
             if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
                 preds, eval_loss, eval_all_label_ids = eval(model, processor, eval_examples,
@@ -889,31 +905,37 @@ def main():
                 result['global_step'] = global_step
                 result['loss'] = loss
 
+                with open(os.path.join(args.output_dir, f'epoch{epoch}.txt'), 'w') as outfile:
+                    print(result, file=outfile)
                 logger.info("==== Evaluating ====")
                 for key in sorted(result.keys()):
                     logger.info("  %s = %s", key, str(result[key]))
+                if task_name == "sts-b":
+                    result_key = 'corr'
+                elif task_name == "cola":
+                    result_key = 'mcc'
+                if best_eval < result[result_key]:
+                    best_eval_epoch = epoch
+                    best_eval = result[result_key]
+                    save_model(model, tokenizer, num_labels, args, -1)
+                    
                 model.train()
 
             logger.info(f"Epoch: {epoch:02d} - training loss: {tr_loss:.4f}" + "\n")
+            logger.info(f"Best eval: {best_eval_epoch:02d} - eval corr: {best_eval:.4f}" + "\n")
 
-    if args.do_train and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        # Save a trained model, configuration and tokenizer
-        model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+    best_output_dir = os.path.join(args.output_dir, 'best_model')
+    # Load a trained model and vocabulary that you have fine-tuned
+    model = BertForSequenceClassification.from_pretrained(
+        best_output_dir, num_labels=num_labels)
+    tokenizer = BertTokenizer.from_pretrained(
+        args.output_dir, do_lower_case=args.do_lower_case)
+    with open(os.path.join(best_output_dir, 'epoch_info.txt'), 'r') as infile:
+        best_epoch = int(infile.readline().strip())
+    # else:
+    #     model = BertForSequenceClassification.from_pretrained(args.bert_model, num_labels=num_labels)
 
-        # If we save using the predefined names, we can load using `from_pretrained`
-        output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
-        output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
-
-        torch.save(model_to_save.state_dict(), output_model_file)
-        model_to_save.config.to_json_file(output_config_file)
-        tokenizer.save_vocabulary(args.output_dir)
-
-        # Load a trained model and vocabulary that you have fine-tuned
-        model = BertForSequenceClassification.from_pretrained(args.output_dir, num_labels=num_labels)
-        tokenizer = BertTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
-    else:
-        model = BertForSequenceClassification.from_pretrained(args.bert_model, num_labels=num_labels)
-    model.to(device)
+    model = model.to(device)
 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         eval_examples = processor.get_dev_examples(args.data_dir)
@@ -934,158 +956,68 @@ def main():
                 logger.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
 
-        # hack for MNLI-MM
-        if task_name == "mnli":
-            task_name = "mnli-mm"
-            processor = processors[task_name]()
-
-            if os.path.exists(args.output_dir + '-MM') and os.listdir(args.output_dir + '-MM') and args.do_train:
-                raise ValueError(
-                    "Output directory ({}) already exists and is not empty.".format(args.output_dir))
-            if not os.path.exists(args.output_dir + '-MM'):
-                os.makedirs(args.output_dir + '-MM')
-
-            eval_examples = processor.get_dev_examples(args.data_dir)
-            eval_features = convert_examples_to_features(
-                eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
-            logger.info("***** Running evaluation *****")
-            logger.info("  Num examples = %d", len(eval_examples))
-            logger.info("  Batch size = %d", args.eval_batch_size)
-            all_input_ids = torch.tensor(
-                [f.input_ids for f in eval_features], dtype=torch.long)
-            all_input_mask = torch.tensor(
-                [f.input_mask for f in eval_features], dtype=torch.long)
-            all_segment_ids = torch.tensor(
-                [f.segment_ids for f in eval_features], dtype=torch.long)
-            all_label_ids = torch.tensor(
-                [f.label_id for f in eval_features], dtype=torch.long)
-
-            eval_data = TensorDataset(
-                all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
-            # Run prediction for full data
-            eval_sampler = SequentialSampler(eval_data)
-            eval_dataloader = DataLoader(
-                eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
-
-            model.eval()
-            eval_loss = 0
-            nb_eval_steps = 0
-            preds = []
-
-            for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader, desc="Evaluating"):
-                input_ids = input_ids.to(device)
-                input_mask = input_mask.to(device)
-                segment_ids = segment_ids.to(device)
-                label_ids = label_ids.to(device)
-
-                with torch.no_grad():
-                    logits = model(input_ids, segment_ids, input_mask, labels=None)
-
-                loss_fct = CrossEntropyLoss()
-                tmp_eval_loss = loss_fct(
-                    logits.view(-1, num_labels), label_ids.view(-1))
-
-                eval_loss += tmp_eval_loss.mean().item()
-                nb_eval_steps += 1
-                if len(preds) == 0:
-                    preds.append(logits.detach().cpu().numpy())
-                else:
-                    preds[0] = np.append(
-                        preds[0], logits.detach().cpu().numpy(), axis=0)
-
-            eval_loss = eval_loss / nb_eval_steps
-            preds = preds[0]
-            preds = np.argmax(preds, axis=1)
-            result = compute_metrics(task_name, preds, all_label_ids.numpy())
-            loss = tr_loss/global_step if args.do_train else None
-
-            result['eval_loss'] = eval_loss
-            result['global_step'] = global_step
-            result['loss'] = loss
-
-            output_eval_file = os.path.join(
-                args.output_dir + '-MM', "eval_results.txt")
-            with open(output_eval_file, "w") as writer:
-                logger.info("***** Eval results *****")
-                for key in sorted(result.keys()):
-                    logger.info("  %s = %s", key, str(result[key]))
-                    writer.write("%s = %s\n" % (key, str(result[key])))
-            
-    
     if args.do_test and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         test_examples = processor.get_test_examples(args.data_dir)
         test_features = convert_examples_to_features(
             test_examples, label_list, args.max_seq_length, tokenizer, output_mode)
-        logger.info("***** Running test *****")
-        logger.info("  Num examples = %d", len(test_examples))
-        logger.info("  Batch size = %d", args.eval_batch_size)
-        all_input_ids = torch.tensor([f.input_ids for f in test_features], dtype=torch.long)
-        all_input_mask = torch.tensor([f.input_mask for f in test_features], dtype=torch.long)
-        all_segment_ids = torch.tensor([f.segment_ids for f in test_features], dtype=torch.long)
-
-        all_label_ids = None
-        # if output_mode == "classification":
-        #     all_label_ids = torch.tensor([f.label_id for f in test_features], dtype=torch.long)
-        # elif output_mode == "regression":
-        #     all_label_ids = torch.tensor([f.label_id for f in test_features], dtype=torch.float)
-
-        test_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids)
-        # Run prediction for full data
-        test_sampler = SequentialSampler(test_data)
-        test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=args.eval_batch_size)
-
-        model.eval()
-        test_loss = 0
-        nb_test_steps = 0
-        preds = []
-
-        for input_ids, input_mask, segment_ids in tqdm(test_dataloader, desc="testing"):
-            input_ids = input_ids.to(device)
-            input_mask = input_mask.to(device)
-            segment_ids = segment_ids.to(device)
-
-            with torch.no_grad():
-                logits = model(input_ids, segment_ids, input_mask, labels=None)
-
-            # create test loss and other metric required by the task
-            # if output_mode == "classification":
-                # loss_fct = CrossEntropyLoss()
-                # tmp_test_loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
-            # elif output_mode == "regression":
-                # loss_fct = MSELoss()
-                # tmp_test_loss = loss_fct(logits.view(-1), label_ids.view(-1))
-            
-            # test_loss += tmp_test_loss.mean().item()
-            nb_test_steps += 1
-            if len(preds) == 0:
-                preds.append(logits.detach().cpu().numpy())
-            else:
-                preds[0] = np.append(
-                    preds[0], logits.detach().cpu().numpy(), axis=0)
-
-        # test_loss = test_loss / nb_test_steps
-        preds = preds[0]
-        if output_mode == "classification":
-            preds = np.argmax(preds, axis=1)
-        elif output_mode == "regression":
-            preds = np.squeeze(preds)
-        # result = compute_metrics(task_name, preds, all_label_ids.numpy())
-        # loss = tr_loss/global_step if args.do_train else None
-
-        # result['test_loss'] = test_loss
-        # result['global_step'] = global_step
-        # result['loss'] = loss
-
+        
+        preds = test(model, processor, test_examples, test_features, output_mode, device, num_labels, args)
         output_test_file = os.path.join(args.output_dir, "test_results.tsv")
-        with open(output_test_file, "w") as writer:
-            logger.info("***** test results *****")
-            writer.write('index\tlabel\n')
-            for idx, item in enumerate(preds.tolist()):
-                item = 0 if item < 0 else item
-                writer.write(str(idx) + '\t' + str(item) + '\n')
-            # for key in sorted(result.keys()):
-            #     logger.info("  %s = %s", key, str(result[key]))
-            #     writer.write("%s = %s\n" % (key, str(result[key])))
+        save_test(output_test_file, preds)
+
+        avg_start = max(best_epoch - 1, 1)
+        avg_end = min(best_epoch + 1, args.num_train_epochs - 1)
+
+        sum_preds = 0
+        for epoch in range(avg_start, avg_end):
+            model_dir = os.path.join(args.output_dir, 'epoch' + str(epoch))
+            model = BertForSequenceClassification.from_pretrained(
+                model_dir, num_labels=num_labels)
+            model = model.to(device)
+            tokenizer = BertTokenizer.from_pretrained(
+                args.output_dir, do_lower_case=args.do_lower_case)
+            preds = test(model, processor, test_examples, test_features, output_mode, device, num_labels, args)
+            sum_preds += preds
+        preds = sum_preds / (avg_end - avg_start)
+        if output_mode == "classification":
+            preds = (preds >= 0.5).astype(np.int)
+        output_test_file = os.path.join(args.output_dir, "avg_test_results.tsv")
+        save_test(output_test_file, preds)
+        
+
+def save_test(output_test_file, preds):
+    with open(output_test_file, "w") as writer:
+        logger.info("***** test results *****")
+        writer.write('index\tlabel\n')
+        for idx, item in enumerate(preds.tolist()):
+            item = 0 if item < 0 else item
+            writer.write(str(idx) + '\t' + str(item) + '\n')
+        # for key in sorted(result.keys()):
+        #     logger.info("  %s = %s", key, str(result[key]))
+        #     writer.write("%s = %s\n" % (key, str(result[key])))
+
+def save_model(model, tokenizer, num_labels, args, epoch):
+    # Save a trained model, configuration and tokenizer
+    model_folder = 'best_model' if epoch < 0 else 'epoch' + str(epoch)
+    output_dir = os.path.join(args.output_dir, model_folder)
+    
+    os.makedirs(output_dir, exist_ok=True)
+    if epoch < 0:
+        epoch_info = os.path.join(output_dir, 'epoch_info.txt')
+        with open(epoch_info, 'w') as epoch_file:
+            print(-epoch, file=epoch_file)
+    model_to_save = model.module if hasattr(
+        model, 'module') else model  # Only save the model it-self
+
+    # If we save using the predefined names, we can load using `from_pretrained`
+    output_model_file = os.path.join(output_dir, WEIGHTS_NAME)
+    output_config_file = os.path.join(output_dir, CONFIG_NAME)
+
+    torch.save(model_to_save.state_dict(), output_model_file)
+    model_to_save.config.to_json_file(output_config_file)
+    tokenizer.save_vocabulary(args.output_dir)
+
+    
 
 def eval(model, processor, eval_examples, eval_features, output_mode, device, num_labels, args):
 
@@ -1104,7 +1036,7 @@ def eval(model, processor, eval_examples, eval_features, output_mode, device, nu
     eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
     # Run prediction for full data
     eval_sampler = SequentialSampler(eval_data)
-    eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
+    eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size, drop_last=True)
 
     model.eval()
     eval_loss = 0
@@ -1144,7 +1076,68 @@ def eval(model, processor, eval_examples, eval_features, output_mode, device, nu
         preds = np.squeeze(preds)
     
     return preds, eval_loss, all_label_ids
-    
+
+def test(model, processor, test_examples, test_features, output_mode, device, num_labels, args):
+    logger.info("***** Running test *****")
+    logger.info("  Num examples = %d", len(test_examples))
+    logger.info("  Batch size = %d", args.eval_batch_size)
+    all_input_ids = torch.tensor([f.input_ids for f in test_features], dtype=torch.long)
+    all_input_mask = torch.tensor([f.input_mask for f in test_features], dtype=torch.long)
+    all_segment_ids = torch.tensor([f.segment_ids for f in test_features], dtype=torch.long)
+
+    all_label_ids = None
+    # if output_mode == "classification":
+    #     all_label_ids = torch.tensor([f.label_id for f in test_features], dtype=torch.long)
+    # elif output_mode == "regression":
+    #     all_label_ids = torch.tensor([f.label_id for f in test_features], dtype=torch.float)
+
+    test_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids)
+    # Run prediction for full data
+    test_sampler = SequentialSampler(test_data)
+    test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=args.eval_batch_size)
+
+    model.eval()
+    test_loss = 0
+    nb_test_steps = 0
+    preds = []
+
+    for input_ids, input_mask, segment_ids in tqdm(test_dataloader, desc="testing"):
+        input_ids = input_ids.to(device)
+        input_mask = input_mask.to(device)
+        segment_ids = segment_ids.to(device)
+
+        with torch.no_grad():
+            logits = model(input_ids, segment_ids, input_mask, labels=None)
+
+        # create test loss and other metric required by the task
+        # if output_mode == "classification":
+            # loss_fct = CrossEntropyLoss()
+            # tmp_test_loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
+        # elif output_mode == "regression":
+            # loss_fct = MSELoss()
+            # tmp_test_loss = loss_fct(logits.view(-1), label_ids.view(-1))
+        
+        # test_loss += tmp_test_loss.mean().item()
+        nb_test_steps += 1
+        if len(preds) == 0:
+            preds.append(logits.detach().cpu().numpy())
+        else:
+            preds[0] = np.append(
+                preds[0], logits.detach().cpu().numpy(), axis=0)
+
+    # test_loss = test_loss / nb_test_steps
+    preds = preds[0]
+    if output_mode == "classification":
+        preds = np.argmax(preds, axis=1)
+    elif output_mode == "regression":
+        preds = np.squeeze(preds)
+    # result = compute_metrics(task_name, preds, all_label_ids.numpy())
+    # loss = tr_loss/global_step if args.do_train else None
+
+    # result['test_loss'] = test_loss
+    # result['global_step'] = global_step
+    # result['loss'] = loss
+    return preds
 
 if __name__ == "__main__":
     main()
