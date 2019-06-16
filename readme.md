@@ -91,9 +91,9 @@ To run the code more conveniently, I wrote some shell scripts for installation, 
    ```bash
    cd ./mt-dnn/scripts
    # Test STS-B with the my pretrained checkpoint
-   ./tes_stsb.sh
+   ./tes_stsb.sh 32 0,1,2,3
    # Test CoLA with the my pretrained checkpoint
-   ./tes_cola.sh
+   ./tes_cola.sh 32 0,1,2,3
    ```
 ## Reference
 [1] Devlin, J., Chang, M. W., Lee, K., & Toutanova, K. (2018). BERT: Pre-training of deep bidirectional transformers for language understanding. arXiv preprint arXiv:1810.04805.
