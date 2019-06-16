@@ -41,7 +41,8 @@ The MT-DNN model improve the Pearson/Spearman Correlation from 87.1/86.0 to 89.9
 
 
 ## Get Started
-To run the code more conveniently, I wrote some shell scripts for installation, training and testing. The steps to use install the environment, training the model and testing are shown below.
+To run the code more conveniently, I wrote some shell scripts for installation, training and testing. The steps to use install the environment, training the model and testing are shown below. PS, since the finetuned models are quite large, I only put the model of MT-DNN in the zip. Please contact me if you need the model of finetuned BERT.
+
 ### Prerequisite
 1. BERT
    ```bash
