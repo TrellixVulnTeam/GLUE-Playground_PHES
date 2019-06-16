@@ -44,6 +44,7 @@ def model_config(parser):
     parser.add_argument('--mix_opt', type=int, default=0)
     parser.add_argument('--max_seq_len', type=int, default=512)
     parser.add_argument('--init_ratio', type=float, default=1)
+    parser.add_argument('--test_only', action='store_true', default=False)
     return parser
 
 def data_config(parser):
@@ -280,7 +281,10 @@ def main():
 
     if args.cuda:
         model.cuda()
-    for epoch in range(0, args.epochs):
+    epochs = args.epochs
+    if args.test_only:
+        epochs = 1
+    for epoch in range(0, epochs):
         logger.warning('At epoch {}'.format(epoch))
         for train_data in train_data_list:
             train_data.reset()
@@ -308,15 +312,15 @@ def main():
             all_indices += [0] * len(train_data_list[0])
         if args.mix_opt < 1:
             random.shuffle(all_indices)
-
-        for i in range(len(all_indices)):
-            task_id = all_indices[i]
-            batch_meta, batch_data= next(all_iters[task_id])
-            model.update(batch_meta, batch_data)
-            if (model.updates) % args.log_per_updates == 0 or model.updates == 1:
-                logger.info('Task [{0:2}] updates[{1:6}] train loss[{2:.5f}] remaining[{3}]'.format(task_id,
-                    model.updates, model.train_loss.avg,
-                    str((datetime.now() - start) / (i + 1) * (len(all_indices) - i - 1)).split('.')[0]))
+        if not args.test_only:
+            for i in range(len(all_indices)):
+                task_id = all_indices[i]
+                batch_meta, batch_data= next(all_iters[task_id])
+                model.update(batch_meta, batch_data)
+                if (model.updates) % args.log_per_updates == 0 or model.updates == 1:
+                    logger.info('Task [{0:2}] updates[{1:6}] train loss[{2:.5f}] remaining[{3}]'.format(task_id,
+                        model.updates, model.train_loss.avg,
+                        str((datetime.now() - start) / (i + 1) * (len(all_indices) - i - 1)).split('.')[0]))
 
         for idx, dataset in enumerate(args.test_datasets):
             prefix = dataset.split('_')[0]

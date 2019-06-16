@@ -73,9 +73,9 @@ To run the code more conveniently, I wrote some shell scripts for installation, 
    # Train MT-DNN model (not necessary using the pretrained one)
    ./run_mt_dnn.sh
    # Finetune pretrained MT-DNN for STS-B
-   ./run_stsb.sh
+   ./run_stsb.sh 32 0,1,2,3
    # Finetune pretrained MT-DNN for CoLA
-   ./run_cola.sh
+   ./run_cola.sh 32 0,1,2,3
    ```
    
 ### Testing
