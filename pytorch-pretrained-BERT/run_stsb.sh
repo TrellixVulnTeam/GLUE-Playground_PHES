@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=bert_STS
-#SBATCH --partition=gpu
+#SBATCH --partition=2080ti
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
 #SBATCH -n 1
@@ -19,7 +19,7 @@ EXP_DIR=exp/$CASED/avg3/lr$LR/$TASK_NAME-$LARGE
 GLUE_DIR=glue_data
 
 mkdir -p $EXP_DIR
-python pytorch-pretrained-BERT/examples/run_classifier.py \
+python examples/run_classifier.py \
   --task_name $TASK_NAME \
   --do_lower_case \
   --do_train \
@@ -41,7 +41,7 @@ EXP_DIR=exp/$CASED/avg3/lr$LR/$TASK_NAME-$LARGE
 GLUE_DIR=glue_data
 
 mkdir -p $EXP_DIR
-python pytorch-pretrained-BERT/examples/run_classifier.py \
+python examples/run_classifier.py \
   --task_name $TASK_NAME \
   --do_train \
   --do_eval \

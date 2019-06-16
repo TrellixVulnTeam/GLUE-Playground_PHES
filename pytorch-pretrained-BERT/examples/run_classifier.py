@@ -966,7 +966,7 @@ def main():
         save_test(output_test_file, preds)
 
         avg_start = max(best_epoch - 1, 1)
-        avg_end = min(best_epoch + 1, args.num_train_epochs - 1)
+        avg_end = min(best_epoch + 1, int(args.num_train_epochs - 1))
 
         sum_preds = 0
         for epoch in range(avg_start, avg_end):
