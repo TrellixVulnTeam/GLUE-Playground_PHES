@@ -34,7 +34,7 @@ The MT-DNN model improve the Pearson/Spearman Correlation from 87.1/86.0 to 89.9
 | **MT-DNN**                                    |  89.4/88.6  |
 | **ensemble MT-DNN with BERT**                 |  **89.9/89.2**  |
 
-| CoLA (modle) | Matthew Correlation |
+| CoLA (model) | Matthew Correlation |
 |:---|:---:|
 | BERT-large-uncased                             |  57.3       |
 | **MT-DNN**                                     |  **60.1**   |
