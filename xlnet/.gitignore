@@ -108,3 +108,4 @@ proc_data/
 pred/
 checkpoints/
 glue_data
+model_checkpoints/
